@@ -10,10 +10,11 @@ st.set_page_config(page_title="마피아 게임 어시스턴트", page_icon="�
 # ==========================================
 def init_session_state():
     default_states = {
-        'phase': 'setup',              # setup / game
+        'phase': 'setup',              
         'player_count': 4,
-        'roles_pool': [],              # 생성된 전체 직업 풀
-        'players_info': {},            # {pid: {'name': '..', 'role': '..', 'alive': True, 'shield': True/False}}
+        'roles_pool': [],              
+        'pool_created': False,         # (수정) 역할 풀 생성 여부 유지
+        'players_info': {},            
         
         # 참가자 뽑기 모드용 상태
         'setup_turn_idx': 0,
@@ -21,12 +22,12 @@ def init_session_state():
         'draw_log': [],
         
         # 게임 진행 상태
-        'history': [],                 # 이전 시간선 복구를 위한 상태 저장소
+        'history': [],                 
         'day': 1,
         'is_night': True,
-        'night_queue': [],             # 밤에 행동할 직업 리스트
-        'current_role_idx': -1,        # 현재 행동 중인 직업 인덱스 (-1은 대기 상태)
-        'night_targets': {},           # 밤 동안의 타겟 지목 상태
+        'night_queue': [],             
+        'current_role_idx': -1,        
+        'night_targets': {},           
         
         # 특수 직업 상태
         'spy_connected': False,
@@ -35,7 +36,7 @@ def init_session_state():
         
         # UI 상태
         'sys_msg': "",
-        'vote_mode': False             # 낮 투표 모드 활성화 여부
+        'vote_mode': False             
     }
     for key, value in default_states.items():
         if key not in st.session_state:
@@ -94,14 +95,13 @@ def check_win():
         elif "스파이" in role and st.session_state.spy_connected: 
             mafia_count += 1
         else:
-            citizen_count += 1 # 정치인도 머릿수는 1명
+            citizen_count += 1
 
     if mafia_count == 0: return "🎉 시민 승리!"
     elif mafia_count >= citizen_count: return "💀 마피아 승리!"
     return None
 
 def save_timeline():
-    """현재 시간선의 핵심 상태를 복사하여 history에 저장"""
     state_copy = {
         'day': st.session_state.day,
         'is_night': st.session_state.is_night,
@@ -117,7 +117,6 @@ def save_timeline():
     st.session_state.history.append(state_copy)
 
 def restore_timeline():
-    """가장 최근 시간선으로 롤백"""
     if st.session_state.history:
         prev_state = st.session_state.history.pop()
         for k, v in prev_state.items():
@@ -159,21 +158,21 @@ def render_setup():
                     "name": player_names[i], "role": role, "alive": True, "shield": "군인" in role
                 }
                 st.session_state.draw_log.append(f"{player_names[i]} → {role}")
-            
-            # 바로 게임 시작 세팅
             start_game_init()
 
     # --- 참가자 방식 ---
     else:
-        if not st.session_state.roles_pool:
+        # (수정) roles_pool이 비어있는지가 아니라, pool_created 상태를 기준으로 판단
+        if not st.session_state.pool_created:
             if st.button("🎲 역할 풀 생성하기", use_container_width=True):
                 st.session_state.roles_pool = setup_roles(st.session_state.player_count)
                 st.session_state.setup_turn_idx = 0
                 st.session_state.players_info = {}
                 st.session_state.draw_log = []
+                st.session_state.pool_created = True
                 st.rerun()
 
-        if st.session_state.roles_pool:
+        if st.session_state.pool_created:
             turn = st.session_state.setup_turn_idx
             
             if turn < st.session_state.player_count:
@@ -196,7 +195,6 @@ def render_setup():
                     
                     is_last = (turn == st.session_state.player_count - 1)
                     
-                    # CSS 주입으로 마지막 버튼 빨간색 처리
                     st.markdown("""
                     <style>
                     button:has(div:contains('설정 마치기')) { background-color: #ff4b4b !important; color: white !important; border-color: #ff4b4b !important; }
@@ -223,58 +221,114 @@ def start_game_init():
     alive_roles = get_alive_roles()
     st.session_state.night_queue = [r for r in night_order if r in alive_roles]
     st.session_state.current_role_idx = -1
-    st.session_state.sys_msg = "🌙 1일차 밤이 되었습니다. [다음 직업 >] 버튼을 눌러주세요."
+    st.session_state.sys_msg = "🌙 1일차 밤이 되었습니다. [다음 직업 ▶] 버튼을 눌러주세요."
     st.rerun()
-
 
 # ==========================================
 # 4. 게임 화면 렌더링
 # ==========================================
 def render_game():
-    # 상단 고정(Sticky) 헤더 CSS
-    bg_color = "black" if st.session_state.is_night else "#ffebcc"
+    # -----------------------------------------------------
+    # (수정) 1. 스크롤을 내려도 고정되는 요일 헤더 (Sticky)
+    # -----------------------------------------------------
+    bg_color = "#1e1e1e" if st.session_state.is_night else "#ffebcc"
     text_color = "white" if st.session_state.is_night else "black"
     phase_text = f"🌙 {st.session_state.day}일차 밤" if st.session_state.is_night else f"☀️ {st.session_state.day}일차 낮"
     
     st.markdown(f"""
-        <div style="position: sticky; top: 2.875rem; left: 0; width: 100%; background-color: {bg_color}; color: {text_color}; 
-             z-index: 999; padding: 15px; text-align: center; font-size: 1.2rem; font-weight: bold; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
-            {phase_text}
-        </div>
+        <style>
+        .fixed-header {{
+            position: fixed;
+            top: 2.875rem; /* Streamlit 기본 상단바 바로 아래 */
+            left: 0;
+            width: 100%;
+            background-color: {bg_color};
+            color: {text_color};
+            z-index: 9999;
+            text-align: center;
+            padding: 12px 0;
+            font-size: 1.3rem;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }}
+        .spacer {{ height: 60px; }}
+        </style>
+        <div class="fixed-header">{phase_text}</div>
+        <div class="spacer"></div>
     """, unsafe_allow_html=True)
 
-    # 상단 컨트롤 패널
+    # -----------------------------------------------------
+    # (수정) 2. 게임 초기화 버튼 (최상단)
+    # -----------------------------------------------------
     col1, col2 = st.columns([1, 1])
     with col1:
-        with st.expander("👁️ 역할 로그 (사회자용)"):
-            for log in st.session_state.draw_log: st.write(log)
-    with col2:
         if st.button("🔄 게임 초기화 (처음으로)", use_container_width=True):
             for key in list(st.session_state.keys()): del st.session_state[key]
             st.rerun()
+    with col2:
+        with st.expander("👁️ 역할 로그 (사회자용)"):
+            for log in st.session_state.draw_log: st.write(log)
 
-    # 현재 승패 상태 체크 (실시간 반영)
+    st.write("---")
+
+    # -----------------------------------------------------
+    # (수정) 3. 시스템 메시지 (두번째)
+    # -----------------------------------------------------
     win_status = check_win()
     if win_status:
         st.error(f"🏆 게임 종료: {win_status}")
     else:
-        st.info(f"**시스템:** {st.session_state.sys_msg}")
+        st.info(f"**시스템:**\n\n{st.session_state.sys_msg}")
 
     st.write("---")
-    
-    # 시간선 이동 컨트롤 (Undo / Redo phase)
+
+    # -----------------------------------------------------
+    # (수정) 4. 다음 행동 조작 (세번째)
+    # -----------------------------------------------------
+    if st.session_state.is_night:
+        st.subheader("🌙 밤 행동 조작")
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c1:
+            if st.button("◀ 이전 직업", use_container_width=True, disabled=st.session_state.current_role_idx <= -1):
+                st.session_state.current_role_idx -= 1
+                update_night_sys_msg()
+                st.rerun()
+        with c2:
+            if st.session_state.current_role_idx == -1:
+                st.markdown("<div style='text-align:center; padding:10px;'>대기 중</div>", unsafe_allow_html=True)
+            elif st.session_state.current_role_idx >= len(st.session_state.night_queue):
+                st.markdown("<div style='text-align:center; padding:10px;'>행동 완료됨</div>", unsafe_allow_html=True)
+            else:
+                current_r = st.session_state.night_queue[st.session_state.current_role_idx]
+                st.markdown(f"<div style='text-align:center; padding:10px; font-weight:bold; color:red;'>[{current_r}] 차례</div>", unsafe_allow_html=True)
+        with c3:
+            if st.button("다음 직업 ▶", use_container_width=True, disabled=st.session_state.current_role_idx >= len(st.session_state.night_queue)):
+                st.session_state.current_role_idx += 1
+                update_night_sys_msg()
+                st.rerun()
+    else:
+        st.subheader("☀️ 낮 행동 조작")
+        st.session_state.vote_mode = st.toggle("🗳️ '투표로 죽이기' 모드 켜기", value=st.session_state.vote_mode)
+        if st.session_state.vote_mode:
+            st.warning("아래 플레이어 버튼을 눌러 처형하거나, 실수로 죽인 사람을 살릴 수 있습니다.")
+
+    st.write("---")
+
+    # -----------------------------------------------------
+    # (수정) 5. 시간선 이동 (네번째)
+    # -----------------------------------------------------
+    st.subheader("⏳ 시간선 이동")
     t_col1, t_col2 = st.columns(2)
     with t_col1:
-        if st.button("⏪ 이전 시간선으로 이동", use_container_width=True, disabled=len(st.session_state.history)==0):
+        if st.button("⏪ 이전 시간선으로", use_container_width=True, disabled=len(st.session_state.history)==0):
             restore_timeline()
             st.rerun()
     with t_col2:
         btn_label = "다음 시간선 (낮으로) ⏩" if st.session_state.is_night else "다음 시간선 (밤으로) ⏩"
         if st.button(btn_label, type="primary", use_container_width=True):
-            save_timeline() # 상태 저장
+            save_timeline()
             
             if st.session_state.is_night:
-                # 밤 -> 낮 처리 로직
                 st.session_state.is_night = False
                 st.session_state.vote_mode = False
                 msg_list = [f"☀️ {st.session_state.day}일차 아침이 밝았습니다."]
@@ -302,73 +356,42 @@ def render_game():
 
                 st.session_state.sys_msg = "\n".join(msg_list)
             else:
-                # 낮 -> 밤 처리 로직
                 st.session_state.day += 1
                 st.session_state.is_night = True
                 st.session_state.night_targets = {}
                 alive_roles = get_alive_roles()
                 st.session_state.night_queue = [r for r in night_order if r in alive_roles]
                 st.session_state.current_role_idx = -1
-                st.session_state.sys_msg = f"🌙 {st.session_state.day}일차 밤이 되었습니다. [다음 직업 >] 버튼을 눌러주세요."
+                st.session_state.sys_msg = f"🌙 {st.session_state.day}일차 밤이 되었습니다. [다음 직업 ▶] 버튼을 눌러주세요."
             st.rerun()
 
     st.write("---")
 
-    # ================= 밤 행동 컨트롤 =================
-    if st.session_state.is_night:
-        st.subheader("🌙 밤 행동 조작")
-        
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c1:
-            if st.button("◀ 이전 직업", use_container_width=True, disabled=st.session_state.current_role_idx <= -1):
-                st.session_state.current_role_idx -= 1
-                update_night_sys_msg()
-                st.rerun()
-        with c2:
-            if st.session_state.current_role_idx == -1:
-                st.markdown("<div style='text-align:center; padding:10px;'>대기 중</div>", unsafe_allow_html=True)
-            elif st.session_state.current_role_idx >= len(st.session_state.night_queue):
-                st.markdown("<div style='text-align:center; padding:10px;'>행동 완료됨</div>", unsafe_allow_html=True)
-            else:
-                current_r = st.session_state.night_queue[st.session_state.current_role_idx]
-                st.markdown(f"<div style='text-align:center; padding:10px; font-weight:bold; color:red;'>[{current_r}] 차례</div>", unsafe_allow_html=True)
-        with c3:
-            if st.button("다음 직업 ▶", use_container_width=True, disabled=st.session_state.current_role_idx >= len(st.session_state.night_queue)):
-                st.session_state.current_role_idx += 1
-                update_night_sys_msg()
-                st.rerun()
-
-    # ================= 낮 투표 컨트롤 =================
-    else:
-        st.subheader("☀️ 낮 투표 조작")
-        st.session_state.vote_mode = st.toggle("🗳️ '투표로 죽이기' 모드 켜기 (버튼 활성화)", value=st.session_state.vote_mode)
-        if st.session_state.vote_mode:
-            st.warning("아래 플레이어 버튼을 눌러 처형하거나, 잘못 죽인 사람을 다시 살릴 수 있습니다.")
-
+    # -----------------------------------------------------
+    # (수정) 6. 플레이어 목록 (마지막) 및 정렬 문제 수정
+    # -----------------------------------------------------
     st.write("### 👥 플레이어 목록")
     cols = st.columns(2)
     
-    # 플레이어 버튼 렌더링
-    for i, (pid, pinfo) in enumerate(st.session_state.players_info.items()):
+    # 딕셔너리의 키(pid)를 기준으로 1, 2, 3, 4 순으로 정렬되게 처리
+    sorted_players = sorted(st.session_state.players_info.items(), key=lambda x: x[0])
+    
+    for i, (pid, pinfo) in enumerate(sorted_players):
         status = "💀 사망" if not pinfo['alive'] else "🙂 생존"
         btn_text = f"{pinfo['name']} ({pinfo['role']})\n{status}"
         
         with cols[i % 2]:
-            # 낮(투표모드)일 때는 모두 활성화하여 죽임/살림 토글 가능하게 함
             if not st.session_state.is_night and st.session_state.vote_mode:
                 btn_action_text = f"💖 살리기: {pinfo['name']}" if not pinfo['alive'] else f"💀 처형: {pinfo['name']}"
                 if st.button(btn_action_text, key=f"v_{pid}", use_container_width=True):
-                    # 상태 토글 (실수 복구 지원)
                     st.session_state.players_info[pid]['alive'] = not pinfo['alive']
                     act = "살렸습니다" if st.session_state.players_info[pid]['alive'] else "처형했습니다"
                     st.session_state.sys_msg = f"⚖️ [수동 조작] {pinfo['name']}님을 {act}."
                     st.rerun()
             
-            # 밤 행동 모드일 때
             else:
                 is_disabled = True
                 if st.session_state.is_night:
-                    # 현재 지목 차례가 유효하고, (대상이 살아있거나, 의사라서 죽은 사람을 누르려는(?) 예외는 제외하고 일단 살아있는 사람만 지목)
                     if 0 <= st.session_state.current_role_idx < len(st.session_state.night_queue):
                         if pinfo['alive']: 
                             is_disabled = False
@@ -378,9 +401,9 @@ def render_game():
 
 def update_night_sys_msg():
     if st.session_state.current_role_idx == -1:
-        st.session_state.sys_msg = "🌙 대기 중입니다. [다음 직업 >]을 누르세요."
+        st.session_state.sys_msg = "🌙 대기 중입니다. [다음 직업 ▶]을 누르세요."
     elif st.session_state.current_role_idx >= len(st.session_state.night_queue):
-        st.session_state.sys_msg = "🌙 모든 밤 행동이 끝났습니다. [다음 시간선 (낮으로) ⏩]를 누르세요."
+        st.session_state.sys_msg = "🌙 모든 밤 행동이 끝났습니다. 아래의 [다음 시간선 (낮으로) ⏩] 버튼을 누르세요."
     else:
         role = st.session_state.night_queue[st.session_state.current_role_idx]
         if role == "스파이": msg = "📝 스파이: 확인할 사람을 선택하세요."
@@ -400,14 +423,14 @@ def handle_night_action(pid, pinfo):
     target_name = pinfo['name']
     
     if role == "기자" and (st.session_state.day == 1 or st.session_state.reporter_used):
-        return # 기자 예외 처리 통과
+        return 
         
     st.session_state.night_targets[role] = pid
     
     if role == "스파이":
         if "마피아" in target_role:
             st.session_state.spy_connected = True
-            st.session_state.sys_msg = "🤝 [접선 성공] 마피아를 찾았습니다."
+            st.session_state.sys_msg = f"🤝 [접선 성공] 마피아({target_name})를 찾았습니다."
         else:
             st.session_state.sys_msg = f"👁️ [확인] {target_name}님은 [{target_role}] 입니다."
     elif role == "마피아":
@@ -424,7 +447,7 @@ def handle_night_action(pid, pinfo):
     elif role == "탐정":
         target_visited = None
         for r, t_pid in st.session_state.night_targets.items():
-            if r in target_role: # 탐정이 지목한 사람이 밤에 누구를 지목했는지
+            if r in target_role: 
                 target_visited = st.session_state.players_info[t_pid]['name']
                 break
         if target_visited:
